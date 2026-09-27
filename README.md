@@ -437,3 +437,6 @@ MIT
 
 <!-- handsoff-issue-1281 -->
 - #1281: refactor(router-core): validate_metadata hardcodes 256/5 instead of the MAX_METADATA_DESCRIPTION_LEN/MAX_METADATA_TAGS constants
+
+<!-- handsoff-issue-1282 -->
+- #1282: bug(router-core): set_scoring_weights and set_max_routes are the only admin setters that emit no event
