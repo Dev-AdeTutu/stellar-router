@@ -428,3 +428,6 @@ MIT
 
 <!-- handsoff-issue-1332 -->
 - #1332: docs(router-multicall): crate-level doc claims the contract batches "read calls" only, but execute_batch supports arbitrary state-mutating calls
+
+<!-- handsoff-issue-1275 -->
+- #1275: refactor(router-common): is_whitespace_only has zero callers anywhere in the 9-contract workspace
