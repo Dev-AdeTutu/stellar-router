@@ -437,3 +437,6 @@ MIT
 
 <!-- handsoff-issue-1277 -->
 - #1277: refactor(router-common): BatchResult::has_failures / BatchCallResult::has_failures are never called anywhere, including by router-common's own tests
+
+<!-- handsoff-issue-1278 -->
+- #1278: bug(router-core): update_route does not validate against the zero address unlike register_route
