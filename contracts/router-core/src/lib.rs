@@ -29,7 +29,7 @@
 //! - `route_resolve_expired` ΓÇö Route resolution attempted on an expired route (route_name)
 //! - `alias_added` ΓÇö Route alias added (existing_name, alias_name)
 //! - `alias_removed` ΓÇö Route alias removed (alias_name)
-//! - `alias_resolved` ΓÇö Route alias resolved (alias_name, resolved_name)
+//! - `alias_resolved` ΓÇö Route alias resolved (alias_name, selected_route_name)
 //! - `route_scored` ΓÇö Route score updated (route_name, score)
 //! - `best_route_selected` ΓÇö Best route selected (route_name)
 //! - `admin_transferred` ΓÇö Admin transferred (old_admin, new_admin)
@@ -885,13 +885,6 @@ impl RouterCore {
             (name.clone(), false)
         };
 
-        if alias_used {
-            env.events().publish(
-                (Symbol::new(&env, router_common::EVENT_ALIAS_RESOLVED),),
-                (name.clone(), resolved_name.clone()),
-            );
-        }
-
         // Score-based selection: the best non-paused scored route is maintained
         // in a cached storage key (DataKey::BestRoute), updated whenever scores,
         // pause state, or routes change. This keeps resolution O(1) instead of
@@ -916,6 +909,13 @@ impl RouterCore {
                     .unwrap_or(false)
             })
             .unwrap_or(resolved_name);
+
+        if alias_used {
+            env.events().publish(
+                (Symbol::new(&env, router_common::EVENT_ALIAS_RESOLVED),),
+                (name.clone(), final_name.clone()),
+            );
+        }
 
         let entry: RouteEntry = env
             .storage()
@@ -3608,6 +3608,76 @@ mod tests {
         client.add_alias(&admin, &r2, &alias);
         assert_eq!(client.resolve(&r1), addr1);
         assert_eq!(client.resolve(&alias), addr1); // score-based: still resolves to r1
+    }
+
+    #[test]
+    fn test_alias_resolved_event_reports_cached_best_route() {
+        let (env, admin, client) = setup();
+        let best_route = String::from_str(&env, "route-a");
+        let aliased_route = String::from_str(&env, "route-b");
+        let alias = String::from_str(&env, "route-b-alias");
+        let best_address = Address::generate(&env);
+        let aliased_address = Address::generate(&env);
+
+        client.register_route(&admin, &best_route, &best_address, &None);
+        client.register_route(&admin, &aliased_route, &aliased_address, &None);
+        client.set_route_score(
+            &admin,
+            &best_route,
+            &RouteScore {
+                liquidity_score: 90,
+                fee_bps: 5,
+                reliability_score: 95,
+            },
+        );
+        client.set_route_score(
+            &admin,
+            &aliased_route,
+            &RouteScore {
+                liquidity_score: 40,
+                fee_bps: 50,
+                reliability_score: 40,
+            },
+        );
+        client.add_alias(&admin, &aliased_route, &alias);
+
+        let events_before_resolve = env.events().all().len();
+        assert_eq!(client.resolve(&alias), best_address);
+
+        let events = env.events().all();
+        let mut resolve_events = events.iter().skip(events_before_resolve as usize);
+        let alias_event = resolve_events
+            .clone()
+            .find(|event| {
+                event
+                    .1
+                    .get(0)
+                    .map(|value| {
+                        let symbol: Symbol = value.into_val(&env);
+                        symbol == Symbol::new(&env, router_common::EVENT_ALIAS_RESOLVED)
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
+        let (emitted_alias, emitted_route): (String, String) = alias_event.2.into_val(&env);
+        assert_eq!(emitted_alias, alias);
+        assert_eq!(emitted_route, best_route);
+
+        let routed_event = resolve_events
+            .find(|event| {
+                event
+                    .1
+                    .get(0)
+                    .map(|value| {
+                        let symbol: Symbol = value.into_val(&env);
+                        symbol == Symbol::new(&env, router_common::EVENT_ROUTED)
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
+        let (routed_name, routed_address): (String, Address) = routed_event.2.into_val(&env);
+        assert_eq!(routed_name, best_route);
+        assert_eq!(routed_address, best_address);
     }
 
     #[test]
