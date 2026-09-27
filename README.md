@@ -434,3 +434,6 @@ MIT
 
 <!-- handsoff-issue-1280 -->
 - #1280: perf(router-core): register_routes_batch's fail_fast duplicate-name check is O(n²) via Vec::contains
+
+<!-- handsoff-issue-1281 -->
+- #1281: refactor(router-core): validate_metadata hardcodes 256/5 instead of the MAX_METADATA_DESCRIPTION_LEN/MAX_METADATA_TAGS constants
