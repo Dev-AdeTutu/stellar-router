@@ -428,3 +428,6 @@ MIT
 
 <!-- handsoff-issue-1332 -->
 - #1332: docs(router-multicall): crate-level doc claims the contract batches "read calls" only, but execute_batch supports arbitrary state-mutating calls
+
+<!-- handsoff-issue-1279 -->
+- #1279: bug(router-core): register_routes_batch fail_fast prevalidation contains an unreachable AlreadyExists check
