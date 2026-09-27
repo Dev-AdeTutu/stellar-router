@@ -428,3 +428,15 @@ MIT
 
 <!-- handsoff-issue-1332 -->
 - #1332: docs(router-multicall): crate-level doc claims the contract batches "read calls" only, but execute_batch supports arbitrary state-mutating calls
+
+<!-- handsoff-issue-1275 -->
+- #1275: refactor(router-common): is_whitespace_only has zero callers anywhere in the 9-contract workspace
+
+<!-- handsoff-issue-1276 -->
+- #1276: testing(router-common): generic key-typed helpers (get_admin, set_admin, require_initialized, require_uninitialized, StorageHelper) are only ever tested with CommonDataKey
+
+<!-- handsoff-issue-1277 -->
+- #1277: refactor(router-common): BatchResult::has_failures / BatchCallResult::has_failures are never called anywhere, including by router-common's own tests
+
+<!-- handsoff-issue-1278 -->
+- #1278: bug(router-core): update_route does not validate against the zero address unlike register_route
