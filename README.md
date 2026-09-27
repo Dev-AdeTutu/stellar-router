@@ -429,6 +429,17 @@ MIT
 <!-- handsoff-issue-1332 -->
 - #1332: docs(router-multicall): crate-level doc claims the contract batches "read calls" only, but execute_batch supports arbitrary state-mutating calls
 
+<!-- handsoff-issue-1279 -->
+- #1279: bug(router-core): register_routes_batch fail_fast prevalidation contains an unreachable AlreadyExists check
+
+<!-- handsoff-issue-1280 -->
+- #1280: perf(router-core): register_routes_batch's fail_fast duplicate-name check is O(n²) via Vec::contains
+
+<!-- handsoff-issue-1281 -->
+- #1281: refactor(router-core): validate_metadata hardcodes 256/5 instead of the MAX_METADATA_DESCRIPTION_LEN/MAX_METADATA_TAGS constants
+
+<!-- handsoff-issue-1282 -->
+- #1282: bug(router-core): set_scoring_weights and set_max_routes are the only admin setters that emit no event
 <!-- handsoff-issue-1275 -->
 - #1275: refactor(router-common): is_whitespace_only has zero callers anywhere in the 9-contract workspace
 
