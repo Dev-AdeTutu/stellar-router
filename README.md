@@ -431,3 +431,6 @@ MIT
 
 <!-- handsoff-issue-1279 -->
 - #1279: bug(router-core): register_routes_batch fail_fast prevalidation contains an unreachable AlreadyExists check
+
+<!-- handsoff-issue-1280 -->
+- #1280: perf(router-core): register_routes_batch's fail_fast duplicate-name check is O(n²) via Vec::contains
