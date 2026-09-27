@@ -50,6 +50,13 @@ const MAX_BACKOFF_MULTIPLIER: u32 = 10_000;
 /// Bounds per-entry storage growth so the history can't grow unbounded.
 const DEFAULT_MAX_HISTORY_SIZE: u32 = 1000;
 
+/// Issue #1304: hard ceiling on `set_max_history_size`'s `new_max`, mirroring
+/// the MIN_BACKOFF_MULTIPLIER/MAX_BACKOFF_MULTIPLIER treatment already
+/// applied to `backoff_multiplier` (issue #633). Without this, an admin
+/// could set an arbitrarily large (e.g. `u32::MAX`) cap, defeating the
+/// bounded-history feature's own unbounded-storage-growth protection.
+const MAX_HISTORY_SIZE_CAP: u32 = 10_000;
+
 /// Maximum backoff delay in milliseconds. Used to cap exponential backoff
 /// calculations and prevent arithmetic overflow when computing
 /// `multiplier^attempt_index`. Derived from practical retry constraints:
@@ -351,6 +358,10 @@ impl RouterExecution {
     /// # Errors
     /// * [`ExecutionError::NotInitialized`] — if the contract is not initialized.
     pub fn backoff_config(env: Env) -> Result<(u64, u32), ExecutionError> {
+        // Issue #1302: extend TTL from this frequently-invoked read call too,
+        // matching router-core's convention of extending on every entry
+        // point (not just state-mutating ones).
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(ExecutionError::NotInitialized);
         }
@@ -622,6 +633,11 @@ impl RouterExecution {
         args: Vec<Val>,
     ) -> Result<SimulationResult, ExecutionError> {
         caller.require_auth();
+        // Issue #1301: every other auth-gated entry point extends the
+        // instance TTL right after require_auth(); simulate() is documented
+        // as a frequently-invoked pre-execute() check, so skipping this made
+        // it exempt from the module's own "frequently-invoked" TTL policy.
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
 
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(ExecutionError::NotInitialized);
@@ -725,7 +741,7 @@ impl RouterExecution {
         if admin != caller {
             return Err(ExecutionError::Unauthorized);
         }
-        if new_max == 0 {
+        if new_max == 0 || new_max > MAX_HISTORY_SIZE_CAP {
             return Err(ExecutionError::InvalidConfig);
         }
         env.storage()
@@ -750,6 +766,8 @@ impl RouterExecution {
     /// # Errors
     /// * [`ExecutionError::NotInitialized`] — if the contract has not been initialized.
     pub fn max_retries(env: Env) -> Result<u32, ExecutionError> {
+        // Issue #1302: extend TTL from this frequently-invoked read call too.
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         env.storage()
             .instance()
             .get(&DataKey::MaxRetries)
@@ -761,6 +779,8 @@ impl RouterExecution {
     /// # Errors
     /// * [`ExecutionError::NotInitialized`] — if the contract is not initialized.
     pub fn max_history_size(env: Env) -> Result<u32, ExecutionError> {
+        // Issue #1302: extend TTL from this frequently-invoked read call too.
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(ExecutionError::NotInitialized);
         }
@@ -779,6 +799,8 @@ impl RouterExecution {
         env: Env,
         limit: u32,
     ) -> Result<Vec<ExecutionRecord>, ExecutionError> {
+        // Issue #1302: extend TTL from this frequently-invoked read call too.
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(ExecutionError::NotInitialized);
         }
@@ -811,6 +833,8 @@ impl RouterExecution {
     /// # Errors
     /// * [`ExecutionError::NotInitialized`] — if the contract is not initialized.
     pub fn execution_history_len(env: Env) -> Result<u32, ExecutionError> {
+        // Issue #1302: extend TTL from this frequently-invoked read call too.
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(ExecutionError::NotInitialized);
         }
@@ -827,6 +851,8 @@ impl RouterExecution {
     /// # Errors
     /// Returns `ExecutionError::NotInitialized` if the contract has not been initialized.
     pub fn admin(env: Env) -> Result<Address, ExecutionError> {
+        // Issue #1302: extend TTL from this frequently-invoked read call too.
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         env.storage()
             .instance()
             .get(&DataKey::Admin)
@@ -837,6 +863,8 @@ impl RouterExecution {
     ///
     /// Returns `(total_executions, total_errors)`.
     pub fn stats(env: Env) -> (u64, u64) {
+        // Issue #1302: extend TTL from this frequently-invoked read call too.
+        router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
         let execs: u64 = env
             .storage()
             .instance()
@@ -853,9 +881,16 @@ impl RouterExecution {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /// Trims `history` down to at most `cap` entries, evicting the oldest first.
+    ///
+    /// Issue #1303: `Vec::remove(0)` shifts every remaining element down by
+    /// one slot, so evicting `k` entries from an `n`-length vector in a loop
+    /// costs O(k * n) element moves — reachable from `set_max_history_size`
+    /// sharply lowering the cap on a near-full history. Taking a single tail
+    /// slice instead is O(cap) regardless of how many entries are dropped.
     fn evict_oldest(history: &mut Vec<ExecutionRecord>, cap: u32) {
-        while history.len() > cap {
-            history.remove(0);
+        let len = history.len();
+        if len > cap {
+            *history = history.slice(len - cap..len);
         }
     }
 
@@ -1254,6 +1289,25 @@ mod tests {
     }
 
     #[test]
+    fn test_set_max_history_size_above_cap_fails() {
+        // Issue #1304: without an upper bound, an admin could set the cap to
+        // e.g. u32::MAX, defeating the bounded-history feature entirely.
+        let (_, admin, client) = setup();
+        let result = client.try_set_max_history_size(&admin, &(MAX_HISTORY_SIZE_CAP + 1));
+        assert_eq!(result, Err(Ok(ExecutionError::InvalidConfig)));
+
+        let result = client.try_set_max_history_size(&admin, &u32::MAX);
+        assert_eq!(result, Err(Ok(ExecutionError::InvalidConfig)));
+    }
+
+    #[test]
+    fn test_set_max_history_size_at_cap_succeeds() {
+        let (_, admin, client) = setup();
+        client.set_max_history_size(&admin, &MAX_HISTORY_SIZE_CAP);
+        assert_eq!(client.max_history_size(), MAX_HISTORY_SIZE_CAP);
+    }
+
+    #[test]
     fn test_set_max_history_size_unauthorized_fails() {
         let (env, _, client) = setup();
         let attacker = Address::generate(&env);
@@ -1294,6 +1348,28 @@ mod tests {
         // Shrinking the cap below the current length trims immediately.
         client.set_max_history_size(&admin, &2);
         assert_eq!(client.get_execution_history(&10).len(), 2);
+    }
+
+    #[test]
+    fn test_evict_oldest_keeps_the_newest_entries_by_identity() {
+        // Issue #1303: evict_oldest was rewritten from a remove(0) loop to a
+        // single tail slice. This confirms the rewrite preserves the exact
+        // "keep newest, drop oldest" semantics by identity, not just count.
+        let (env, admin, client) = setup();
+        let target = Address::generate(&env);
+        env.as_contract(&client.address, || {
+            for name in ["fn0", "fn1", "fn2", "fn3", "fn4"] {
+                RouterExecution::append_history(&env, &target, &Symbol::new(&env, name), true, 0);
+            }
+        });
+
+        client.set_max_history_size(&admin, &2);
+
+        let history = client.get_execution_history(&10);
+        assert_eq!(history.len(), 2);
+        // Newest-first: fn4 then fn3 survive; fn0..fn2 were evicted.
+        assert_eq!(history.get(0).unwrap().function, Symbol::new(&env, "fn4"));
+        assert_eq!(history.get(1).unwrap().function, Symbol::new(&env, "fn3"));
     }
 
     #[test]
