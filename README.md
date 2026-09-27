@@ -431,3 +431,6 @@ MIT
 
 <!-- handsoff-issue-1275 -->
 - #1275: refactor(router-common): is_whitespace_only has zero callers anywhere in the 9-contract workspace
+
+<!-- handsoff-issue-1276 -->
+- #1276: testing(router-common): generic key-typed helpers (get_admin, set_admin, require_initialized, require_uninitialized, StorageHelper) are only ever tested with CommonDataKey
