@@ -434,3 +434,6 @@ MIT
 
 <!-- handsoff-issue-1276 -->
 - #1276: testing(router-common): generic key-typed helpers (get_admin, set_admin, require_initialized, require_uninitialized, StorageHelper) are only ever tested with CommonDataKey
+
+<!-- handsoff-issue-1277 -->
+- #1277: refactor(router-common): BatchResult::has_failures / BatchCallResult::has_failures are never called anywhere, including by router-common's own tests
