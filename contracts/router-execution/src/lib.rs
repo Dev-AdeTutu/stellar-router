@@ -30,13 +30,13 @@ use soroban_sdk::{
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Fixed-point scale factor used for multiplier arithmetic (100 = 1.0×).
-/// e.g. backoff_multiplier=200 means 2.0×, 150 means 1.5×.
 /// Issue #1195: caps `ExecutionRequest.args`/`simulate()`'s `args` length,
 /// mirroring `router-multicall`'s `MAX_ARGS_PER_CALL` guard against
 /// unbounded argument vectors being forwarded to `try_invoke_contract`.
 const MAX_ARGS_PER_CALL: u32 = 20;
 
+/// Fixed-point scale factor used for multiplier arithmetic (100 = 1.0×).
+/// e.g. backoff_multiplier=200 means 2.0×, 150 means 1.5×.
 const FIXED_POINT_SCALE: u32 = 100;
 
 /// Minimum valid backoff multiplier: 100 = 1.0× (no growth, constant delay).
@@ -391,6 +391,15 @@ impl RouterExecution {
     ) -> Result<ExecutionResult, ExecutionError> {
         caller.require_auth();
         router_common::extend_instance_ttl(&env, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+
+        // Issue #1300: check initialization first, matching estimate_fee and
+        // simulate()'s ordering, so an uninitialized contract consistently
+        // returns NotInitialized regardless of which entry point is called
+        // (rather than InvalidAmount/ArgsTooLarge here specifically, just
+        // because those checks happened to run first).
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(ExecutionError::NotInitialized);
+        }
 
         if request.amount <= 0 {
             return Err(ExecutionError::InvalidAmount);
@@ -888,19 +897,20 @@ impl RouterExecution {
 
     /// Compute exponential backoff delay in milliseconds for a given attempt index.
     ///
-    /// Formula: `delay = base_ms * (multiplier / 100)^attempt_index`
+    /// Formula: `delay = base_ms * (multiplier / 100)^attempt_index`, computed
+    /// iteratively rather than via `pow`: each attempt multiplies the running
+    /// backoff by `multiplier` (via `checked_mul`) and scales it back down by
+    /// `FIXED_POINT_SCALE`, capping at `MAX_BACKOFF_MS` as soon as any step
+    /// overflows or the running value reaches that cap (Issue #569). See the
+    /// inline comments on the implementation for why this early-exit-per-
+    /// iteration approach is used instead of raising `multiplier` to
+    /// `attempt_index` directly.
     ///
-    /// Uses checked arithmetic to prevent overflow panics (Issue #569):
-    /// - `multiplier^attempt_index` is computed via `checked_pow`
-    /// - Intermediate multiplication uses `checked_mul`
-    /// - Any overflow results in the delay being capped at `MAX_BACKOFF_MS`
+    /// Fast paths, taken without ever entering the loop: a zero `base_ms`
+    /// stays zero, and a `multiplier` at or below `FIXED_POINT_SCALE` (1.0×,
+    /// no growth) returns `base_ms` unchanged.
     ///
-    /// The denominator `100^attempt_index` is computed with unchecked `pow` because
-    /// it is provably safe: with `max_retries` capped at 5 (enforced in `initialize`),
-    /// `attempt_index ≤ 5`, and `100u64.pow(5) = 10,000,000,000` is well within
-    /// `u64::MAX` (18,446,744,073,709,551,615).
-    ///
-    /// If `attempt_index` is 0, the formula reduces to `base_ms` (no growth).
+    /// If `attempt_index` is 0, the result is `base_ms` (no growth).
     ///
     /// # Security
     /// Before this fix, the calculation used unchecked `u32::pow`, which panicked
@@ -1846,6 +1856,34 @@ mod tests {
         assert_eq!(evt_function, function);
         assert!(evt_success);
         assert_eq!(evt_attempts, 1);
+    }
+
+    #[test]
+    fn test_execute_uninitialized_fails_with_not_initialized_even_with_invalid_amount() {
+        // Issue #1300: execute() used to validate amount/args before checking
+        // initialization, so an uninitialized contract called with an
+        // invalid amount returned InvalidAmount instead of NotInitialized —
+        // inconsistent with estimate_fee/simulate()'s ordering. This request
+        // is deliberately invalid on more than one axis (amount <= 0) to
+        // prove NotInitialized wins regardless.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, RouterExecution);
+        let client = RouterExecutionClient::new(&env, &contract_id);
+        let mock_id = env.register_contract(None, MockTarget);
+        let caller = Address::generate(&env);
+
+        let request = ExecutionRequest {
+            target: mock_id,
+            function: Symbol::new(&env, "ping"),
+            simulate_first: false,
+            max_retries: 0,
+            args: Vec::new(&env),
+            amount: 0,
+        };
+
+        let result = client.try_execute(&caller, &request);
+        assert_eq!(result, Err(Ok(ExecutionError::NotInitialized)));
     }
 
     #[test]

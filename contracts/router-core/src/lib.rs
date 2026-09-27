@@ -1428,6 +1428,19 @@ impl RouterCore {
         let mut tags = Vec::new(&env);
 
         for name in Self::get_route_names(&env).iter() {
+            // Issue #1297: skip expired routes, matching get_all_routes,
+            // so a tag that exists only on expired routes isn't reported as
+            // currently in use.
+            let expired = env
+                .storage()
+                .instance()
+                .get::<DataKey, RouteEntry>(&DataKey::Route(name.clone()))
+                .map(|e| is_route_expired(&env, &e))
+                .unwrap_or(false);
+            if expired {
+                continue;
+            }
+
             if let Some(metadata) = env
                 .storage()
                 .instance()
@@ -5311,6 +5324,56 @@ mod tests {
         assert!(tags.contains(&dex));
         assert!(tags.contains(&stable));
         assert!(tags.contains(&beta));
+    }
+
+    #[test]
+    fn test_get_all_tags_excludes_expired_routes() {
+        // Issue #1297: get_all_tags iterated raw route names instead of
+        // filtering expired routes like get_all_routes does, so a tag that
+        // exists only on an expired route was still reported as in use.
+        let (env, admin, client) = setup();
+        let addr = Address::generate(&env);
+        let shared = String::from_str(&env, "shared-tag");
+        let expired_only = String::from_str(&env, "expired-only-tag");
+        let live_only = String::from_str(&env, "live-only-tag");
+        let temp = String::from_str(&env, "temp-route");
+        let permanent = String::from_str(&env, "permanent-route");
+
+        client.register_route(
+            &admin,
+            &temp,
+            &addr,
+            &Some(RouteMetadata {
+                description: String::from_str(&env, "Temp route"),
+                tags: vec![&env, shared.clone(), expired_only.clone()],
+                owner: admin.clone(),
+            }),
+        );
+        client.register_route(
+            &admin,
+            &permanent,
+            &addr,
+            &Some(RouteMetadata {
+                description: String::from_str(&env, "Permanent route"),
+                tags: vec![&env, shared.clone(), live_only.clone()],
+                owner: admin.clone(),
+            }),
+        );
+        client.extend_route_ttl(&admin, &temp, &5);
+
+        // Both routes still live: all three tags present.
+        let tags = client.get_all_tags();
+        assert_eq!(tags.len(), 3);
+
+        env.ledger().with_mut(|li| li.sequence_number += 6);
+
+        // temp-route is now expired: expired_only must disappear, but shared
+        // (also on the still-live permanent route) and live_only must remain.
+        let tags = client.get_all_tags();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.contains(&shared));
+        assert!(tags.contains(&live_only));
+        assert!(!tags.contains(&expired_only));
     }
 
     // ΓöÇΓöÇ Issue #632: get_all_tags O(n┬▓) deduplication ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
