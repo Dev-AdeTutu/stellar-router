@@ -440,3 +440,14 @@ MIT
 
 <!-- handsoff-issue-1282 -->
 - #1282: bug(router-core): set_scoring_weights and set_max_routes are the only admin setters that emit no event
+<!-- handsoff-issue-1275 -->
+- #1275: refactor(router-common): is_whitespace_only has zero callers anywhere in the 9-contract workspace
+
+<!-- handsoff-issue-1276 -->
+- #1276: testing(router-common): generic key-typed helpers (get_admin, set_admin, require_initialized, require_uninitialized, StorageHelper) are only ever tested with CommonDataKey
+
+<!-- handsoff-issue-1277 -->
+- #1277: refactor(router-common): BatchResult::has_failures / BatchCallResult::has_failures are never called anywhere, including by router-common's own tests
+
+<!-- handsoff-issue-1278 -->
+- #1278: bug(router-core): update_route does not validate against the zero address unlike register_route
